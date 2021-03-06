@@ -1,0 +1,459 @@
+---
+title: 'CS 346 Final Project: Horse Colic'
+author: "Eliot Stanton"
+date: "Spring 2020"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+Loading required libraries:
+```{r,warning=FALSE,message=FALSE}
+library(mosaic)
+library(rpart)
+library(rpart.plot)
+library(mlbench)
+library(caret)
+library(randomForest)
+library(caTools)
+library(e1071)
+library(neuralnet)
+library(tidyverse)
+```
+
+**DATA CLEANING**
+
+Loading data set, consolidating it, adding column names:
+```{r}
+horse.colic <- read.table("~/Desktop/college/Spring 2020/DataMining/data/horse-colic.data", quote="\"", comment.char="")
+#View(horse.colic)
+horse.colic.test <- read.table("~/Desktop/college/Spring 2020/DataMining/data/horse-colic.test", quote="\"", comment.char="")
+#View(horse.colic.test)
+horse <- rbind(horse.colic,horse.colic.test)
+names(horse) <- c("surgery","age","horseID","rectaltemp","pulse","resprate","extrtemp","periphpulse","mucous","capref","pain","peristalsis","abdist","nasogastube","nasogasref","nasogasrefph","feces","abdomen","cellvol","protein","abcentap","abcenpro","outcome","surgles","lestypeone","lestypetwo","lestypethree","pathdata")
+horse[horse=="?"]=NA
+#View(horse)
+```
+
+
+Fixing variable types and levels:
+```{r}
+horse$surgery <- factor(horse$surgery,levels=c(1,2),labels=c("yes","no"))
+
+horse$age <- factor(horse$age,levels=c(9,1),labels=c("<6mos","adult"))
+
+horse$horseID <- as.character(horse$horseID)
+
+horse$rectaltemp <- as.numeric(as.character(horse$rectaltemp))
+
+horse$pulse <- as.numeric(as.character(horse$pulse))
+
+horse$resprate <- as.numeric(as.character(horse$resprate))
+
+horse$extrtemp <- factor(horse$extrtemp,levels=c(4,3,1,2),labels=c("cold","cool","normal","warm"))
+
+horse$periphpulse <- factor(horse$periphpulse,levels=c(4,3,1,2),labels=c("absent","reduced","normal","increased"))
+
+horse$mucous <- factor(horse$mucous,levels=c(1,2,3,4,6,5),labels=c("normal pink","bright pink","pale pink","pale cyanotic","dark cyanotic","bright red/injected"))
+
+horse$capref <- factor(horse$capref,levels=c(1,2),labels=c("<3secs",">=3secs"))
+
+horse$pain <- as.numeric(as.character(horse$pain))
+
+horse$peristalsis <- factor(horse$peristalsis,levels=c(4,3,2,1),labels=c("absent","hypomotile","normal","hypermotile"))
+
+horse$abdist <- factor(horse$abdist,levels=c(1,2,3,4),labels=c("none","slight","moderate","severe"))
+
+horse$nasogastube <- factor(horse$nasogastube,levels=c(1,2,3),labels=c("none","slight","significant"))
+
+horse$nasogasref <- factor(horse$nasogasref,levels=c(1,3,2),labels=c("none","<1L",">1L"))
+
+horse$nasogasrefph <- as.numeric(as.character(horse$nasogasrefph))
+
+horse$feces <- factor(horse$feces,levels=c(4,3,1,2),labels=c("absent","decreased","normal","increased"))
+
+horse$abdomen <- factor(horse$abdomen,levels=c(1,2,3,4,5),labels=c("normal","other","firminlarge","distendedsmall","distendedlarge"))
+
+horse$cellvol <- as.numeric(as.character(horse$cellvol))
+
+horse$protein <- as.numeric(as.character(horse$protein))
+
+horse$abcentap <- factor(horse$abcentap,levels=c(1,2,3),labels=c("clear","cloudy","serosanguinous"))
+
+horse$abcenpro <- as.numeric(as.character(horse$abcenpro))
+
+horse$outcome <- factor(horse$outcome,levels=c(1,2,3),labels=c("lived","died","euthanized"))
+
+horse$surgles <- factor(horse$surgles,labels=c("yes","no"))
+
+horse$pathdata <- factor(horse$pathdata,labels=c("yes","no"))
+
+horse <- mutate(horse,lived=ifelse(outcome=="lived","yes","no")) 
+
+horse <- horse[!is.na(horse$lived),]
+
+```
+
+Code to print all unique values of each variable (not run here):
+```{r,eval=FALSE, message=FALSE, include=FALSE, r,warning=FALSE}
+for (col in names(horse)){
+  print(col)
+  print(unique(horse[,col]))
+}
+```
+
+Creating subsets/mutated versions of the data (making variables numeric, replacing missing values):
+```{r}
+#all the categorical variables including lived
+cat <- select(horse,c("surgery","age","extrtemp","periphpulse","mucous","capref","peristalsis","abdist","nasogastube","nasogasref","feces","abdomen","abcentap","surgles","lived"))
+
+#copy of categorical variables to regroup them and get rid of missing values
+categorical <- cat
+
+categorical$abcentap <- fct_collapse(categorical$abcentap,normal=c("clear"),abnormal=c("cloudy","serosanguinous"))
+for(j in 1:length(categorical$abcentap)){
+    if(is.na(categorical$abcentap[j])){
+      categorical$abcentap[j]="normal"
+    }
+}
+
+categorical$extrtemp <- fct_collapse(categorical$extrtemp,cold=c("cool","cold"))
+for(j in 1:length(categorical$extrtemp)){
+    if(is.na(categorical$extrtemp[j])){
+      categorical$extrtemp[j]="normal"
+    }
+}
+
+categorical$periphpulse <- fct_collapse(categorical$periphpulse,normal=c("normal","increased"),poor=c("reduced","absent"))
+for(j in 1:length(categorical$periphpulse)){
+    if(is.na(categorical$periphpulse[j])){
+      categorical$periphpulse[j]="normal"
+    }
+}
+
+categorical$mucous <- fct_collapse(categorical$mucous,normal=c("normal pink","bright pink"),bad=c("pale pink","pale cyanotic","dark cyanotic","bright red/injected"))
+for(j in 1:length(categorical$mucous)){
+    if(is.na(categorical$mucous[j])){
+      categorical$mucous[j]="normal"
+    }
+}
+
+categorical$peristalsis <- fct_collapse(categorical$peristalsis,normal=c("normal","hypermotile"),slow=c("hypomotile","absent"))
+for(j in 1:length(categorical$peristalsis)){
+    if(is.na(categorical$peristalsis[j])){
+      categorical$peristalsis[j]="normal"
+    }
+}
+
+categorical$abdist <- fct_collapse(categorical$abdist,low=c("normal","slight"),high=c("moderate","severe"))
+for(j in 1:length(categorical$abdist)){
+  if(is.na(categorical$abdist[j])){
+    categorical$abdist[j]="low"
+  }
+}
+
+categorical$nasogastube <- fct_collapse(categorical$nasogastube,low=c("none","slight"),high=c("significant"))
+for(j in 1:length(categorical$nasogastube)){
+  if(is.na(categorical$nasogastube[j])){
+    categorical$nasogastube[j]="low"
+  }
+}
+
+categorical$nasogasref<- fct_collapse(categorical$nasogasref,gas=c("<1L",">1L"))
+for(j in 1:length(categorical$nasogasref)){
+  if(is.na(categorical$nasogasref[j])){
+    categorical$nasogasref[j]="none"
+  }
+}
+
+categorical$feces <- fct_collapse(categorical$feces,normal=c("normal","increased"),less=c("decreased","absent"))
+for(j in 1:length(categorical$feces)){
+  if(is.na(categorical$feces[j])){
+    categorical$feces[j]="normal"
+  }
+}
+
+categorical$abdomen <- fct_collapse(categorical$abdomen,normal=c("normal","other","firminlarge"),distended=c("distendedsmall","distendedlarge"))
+for(j in 1:length(categorical$abdomen)){
+  if(is.na(categorical$abdomen[j])){
+    categorical$abdomen[j]="normal"
+  }
+}
+
+for(j in 1:length(categorical$capref)){
+  if(is.na(categorical$capref[j])){
+    categorical$capref[j]="<3secs"
+  }
+}
+
+#all the numeric variables
+numeric <- select(horse,c("rectaltemp","pulse","resprate","pain","nasogasrefph","cellvol","protein","abcenpro"))
+
+#all numeric variables with no missing values
+numnona <- numeric
+for (i in 1:ncol(numnona)){
+  average <- mean(numnona[,i],na.rm=TRUE)
+  for(j in 1:nrow(numnona)){
+    if(is.na(numnona[j,i])){
+      numnona[j,i]=average
+    }
+  }
+}
+
+#all the categorical variables turned numeric except lived
+cattonum <- categorical
+n=1
+while(n < ncol(categorical)){
+  cattonum[,n] <- as.numeric(categorical[[n]])
+  n=n+1
+}
+
+#all variables in numeric form except lived, no missing values
+allnum <- cbind(numnona,cattonum)
+
+#all originally numeric variables with no missing values, plus lived
+num <- mutate(numnona,lived=horse$lived)
+
+#no missing values at all,both numeric and categorical variables
+ht <- data.frame(categorical,numnona)
+
+ht$lived <- as.factor(ht$lived)
+
+```
+
+Creating new variable for number of morbidity factors a horse has:
+```{r}
+ht$indicators <- 0
+for(i in 1:nrow(ht)){
+  n = 0
+  a <- ht[i,]
+  if(a$extrtemp=="cold"){n=n+1}
+  if(a$mucous=="bad"){n=n+1}
+  if(a$capref==">=3secs"){n=n+1}
+  if(a$periphpulse=="poor"){n=n+1}
+  if(a$peristalsis=="slow"){n=n+1}
+  if(a$abdist=="high"){n=n+1}
+  if(a$abdomen=="distended"){n=n+1}
+  if(a$abcentap=="abnormal"){n=n+1}
+  if(a$feces=="less"){n=n+1}
+  if(a$cellvol>=50){n=n+1}
+  if(a$pulse>=60){n=n+1}
+  if(a$pain>=3){n=n+1}
+  if(a$protein>10){n=n+1}
+  if(a$abcenpro>3){n=n+1}
+  ht$indicators[i]=n
+}
+#adding to the proper datasets besides ht
+num<- mutate(num,indicators=ht$indicators)
+allnum<- mutate(allnum,indicators=ht$indicators)
+numnona<- mutate(numnona,indicators=ht$indicators)
+```
+
+**FEATURE SELECTION/IMPORTANCE**
+
+Variable importance of categorical variables only:
+  Broken down by each level separately, so less useful, but mucous and abdist are at the top.
+```{r}
+control <- trainControl(method="repeatedcv", number=10, repeats=3)
+model <- train(lived~., data=categorical, method="rf", preProcess="scale", trControl=control,na.action=na.omit)
+print(model)
+# estimate variable importance
+importance <- varImp(model, scale=FALSE)
+# summarize importance
+print(importance)
+# plot importance
+plot(importance)
+```
+
+Variable importance of numeric variables only:
+  Pulse, cellvol, and indicators are most important
+```{r}
+model <- train(lived~., data=num, method="rf", preProcess="scale",na.action=na.omit)
+print(model)
+# estimate variable importance
+importance <- varImp(model, scale=TRUE)
+# summarize importance
+print(importance)
+# plot importance
+plot(importance)
+```
+
+Variable importance of both categorical and numeric variables, treating categorical variables as numeric:
+  Consistently important variables are pulse, indicators, cellvol, protein.
+```{r}
+control <- trainControl(method="repeatedcv", number=10, repeats=3)
+
+#View(num)
+model <- train(lived~., data=allnum, method="rf", preProcess="scale", trControl=control,na.action=na.omit)
+# estimate variable importance
+importance <- varImp(model, scale=FALSE)
+# summarize importance
+print(importance)
+# plot importance
+plot(importance)
+```
+
+Correlation of numeric variables only:
+  None of them are so highly-correlated that any variables should be avoided.
+```{r}
+correlationMatrix <- cor(numnona)
+# summarize the correlation matrix
+print(correlationMatrix)
+# find attributes that are highly corrected (ideally >0.75, but here 0.5
+highlyCorrelated <- findCorrelation(correlationMatrix, cutoff=0.25,  verbose = TRUE, names = TRUE)
+# print indexes of highly correlated attributes
+print(highlyCorrelated)
+```
+
+Takeaways from feature selection-
+  When looking at numeric and categorical variables together, the originally numeric variables show up as more important than the categorical-turned-numeric variables. In models, still choose some of the top categorical variables from looking at just categorical variables, in case there is some bias against them in the combined importance calculation.
+  Looking at the information on the variables provided along with the dataset can also help with feature selection. For example, it says abdist is a very important variable. And, it says that pain should not be considered as quantitative, so I'd avoid that variable even if it shows up as important in the calculation.
+  Also looked at tally tables (in percent form) for the categorical variables to see the different distributions among horses that lived versus those that died. No one variable was wildly awesome. Best case scenario had 25% of horses that lived exhibiting a morbidity factor with 50% of those that died exhibiting it too. 
+  Adding the indicators variable for number of morbidity factors was a good idea! This helps since horses have many different combinations of morbidity factors (no one obvious predictor) but overall some have far more than others.
+  
+
+
+**MODELS**
+
+Tree of categorical variables only:
+  Did this as more of a test than for evaluating performance.
+```{r}
+s <- sample(368,250)
+train <- categorical[s,]
+test <- categorical[-s,]
+#c <- rpart.control(minsplit=10,cp=.0001,maxsurrogate=0,maxdepth=5)
+nmm <- rpart(lived~.,data=train)#,control=c)
+rpart.plot(nmm,extra=104)#,box.palette="Blues")
+p<- predict(nmm,test,type="class")
+table(test[,14],p)
+```
+
+Tree with all variables:
+  Accuracy most commonly around 67%, but ranging 55-75%.
+  Fiddling with parameters honestly didn't get wildly different results for me... 
+```{r}
+s <- sample(366,250)
+train <- ht[s,]
+test <- ht[-s,]
+#c <- rpart.control(minsplit=1,cp=.05,maxsurrogate=3,maxdepth=5)
+htcart <- rpart(lived~.,data=train,method="class")#,control=c)
+rpart.plot(htcart)
+p<- predict(htcart,test,type="class")
+tablemat <- table(test[,15],p)
+tablemat
+
+accuracy <- sum(diag(tablemat))/sum(tablemat)
+accuracy
+```
+
+
+
+Tree with most important variables:
+  Tried just with indicators and cellvol... accuracy around 68%.
+  Accuracy isn't much better with the top 9 or so variables... similar mean accuracy (65%) but higher range in both good and bad directions (60-75%)
+```{r}
+#ht <- data.frame(categorical,numnona)
+s <- sample(366,200)
+train <- ht[s,]
+test <- ht[-s,]
+c <- rpart.control(minsplit=1,cp=.01,maxsurrogate=3,maxdepth=5)
+htcart <- rpart(lived~indicators+mucous+pulse+periphpulse+abdist+abdomen+cellvol+rectaltemp+abcenpro,data=train,method="class",control=c) #+mucous+pulse+periphpulse+cellvol
+#htcart <- rpart(lived~indicators+cellvol,data=train,method="class",control=c)
+rpart.plot(htcart)
+p<- predict(htcart,test,type="class")
+tablemat <- table(test[,15],p)
+tablemat
+
+accuracy <- sum(diag(tablemat))/sum(tablemat)
+accuracy
+```
+
+Random Forest:
+  Produces widely variable results (65% to 90%), but mostly 75-80%.
+  Interesting that range of results is wider than it is for a single tree...
+  Using all variables here.
+```{r}
+
+s <- sample(366,250)
+train <- ht[s,]
+test <- ht[-s,]
+
+rf <- randomForest(lived~.,data=train)
+#take a look
+rf
+
+#pred and evaluate
+pred = predict(rf, newdata=test[-15])
+cm = table(test[,15], pred)
+cm
+
+
+accuracy_Test <- sum(diag(cm)) / sum(cm)
+accuracy_Test
+```
+
+Support Vector Machine:
+  Accuracy in the low 60s, around 63%.
+```{r}
+s <- sample(366,250)
+train <- ht[s,]
+test <- ht[-s,]
+
+model <- svm(lived~indicators+mucous+pulse+periphpulse+abdist+abdomen+cellvol+rectaltemp+abcenpro,data=train, probability=TRUE, cost = 100, gamma = 1,kernel="sigmoid")
+print(model)
+summary(model)
+
+# compute decision values and probabilites
+pred <- predict(model, subset(test,select=-lived),decision.values = TRUE, probability = TRUE)
+attr(pred, "decision.values")[c(-15),]
+attr(pred, "probabilities")[c(-15),] #sometimes nice to have probabilities to put into another model
+plot(pred)
+
+table_mat <- table(test$lived, pred)
+table_mat
+
+accuracy_Test <- sum(diag(table_mat)) / sum(table_mat)
+accuracy_Test
+```
+
+
+Neural Network:
+  Wide range in accuracy. Most commonly around 68% but ranging up to 78%.
+  Once again adjusting parameters didn't make much of an impact.
+```{r}
+l <- as.numeric(as.factor(allnum$lived))
+
+a <- allnum
+a$lived <- l
+
+max = apply(a , 2 , max)
+min = apply(a, 2 , min)
+scaled = as.data.frame(scale(a, center = min, scale = max - min))
+
+s <- sample(366,250)
+train <- scaled[s,]
+test <- scaled[-s,]
+
+nn <- neuralnet(lived~indicators+mucous+pulse+periphpulse+abdist+abdomen+cellvol+rectaltemp+abcenpro,data = train, hidden=c(10),act.fct = "logistic", linear.output = FALSE)
+plot(nn)
+
+## Prediction using neural network
+prediction=predict(nn,test[,-23])
+
+prob <- prediction
+pred <- ifelse(prob>0.5, 1, 0)
+pred
+
+cm <- table(test$lived,pred)
+cm
+accuracy <- sum(diag(cm)) / sum(cm)
+accuracy
+```
+
+
+**REFLECTION**
+  Getting to apply a dataset to several different models was definitely helpful. I found it most frustrating that most of my models had similarly mediocre accuracy, even when I changed the features I was using or the values of a model's parameters. Maybe my dataset wasn't the greatest, or this is something that's just hard to predict. I would be interested to put each case before a large animal vet and see if they have an intuitive understanding of rules that work better/compare their accuracy with my models...
+  Honestly? I'm most proud that I got through all the errors just to get these models working in the first place. There were several that were really tricky. The way that I fixed them all was by removing missing values. I replaced missing values for numeric variables with the mean, and missing values for categorical variables with the normal value rather than the positive display of a morbidity factor. In hindsight, this definitely could have impacted my results, especially since the missing values were distributed fairly evenly among horses that lived and horses that died. I wish the models had worked better with missing values (instead of just omitting all rows with anything missing) so I could have applied what we learned about dealing with them instead of just removing them all.
+  I'm not surprised that my random forest works best, since ensemble models frequently do better than simpler models, but it was surprising that there was more variability in its accuracy than there was in a single tree's. From here if I were to continue exploring I would be more systematic about changing parameters and recording resulting accuracy, perhaps running models 100 times and looking at the distribution of accuracy results to see if it's normal, skewed, with high or low spread. I think I'd also try more models with just one or two variables, since those work just about as well as a model with only the best predictors or a model with every single predictor included.
+
+
